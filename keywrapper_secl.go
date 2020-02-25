@@ -4,6 +4,12 @@ import (
 	"crypto/ecdsa"
 	"encoding/json"
 
+	// Sym key enc libs
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"io"
+
 	"github.com/containers/ocicrypt/config"
 	"github.com/containers/ocicrypt/keywrap"
 	encutils "github.com/containers/ocicrypt/utils"
@@ -11,10 +17,27 @@ import (
 	jose "gopkg.in/square/go-jose.v2"
 )
 
+const (
+	// WrapTypeAssymetric uses assymmetric keys to perform wrapping with a JWE packet
+	WrapTypeAssymmetric string = "asym"
+	// WrapTypeSymmetric uses symmetric keys to perform wrapping with AES_GCM
+	WrapTypeSymmetric string = "sym"
+)
+
+var (
+	WrapMode string = WrapTypeSymmetric
+)
+
 type seclKeyWrapper struct{}
 type annotationPacket struct {
 	KeyUrl     string `json:"key_url"`
 	WrappedKey []byte `json:"wrapped_key"`
+	WrapType   string `json:"wrap_type"`
+}
+
+type aesPacket struct {
+	Ciphertext []byte `json:"cipher_text"`
+	Nonce      []byte `json:"nonce"`
 }
 
 func NewKeyWrapper() keywrap.KeyWrapper {
@@ -33,10 +56,11 @@ func (kw *seclKeyWrapper) WrapKeys(ec *config.EncryptConfig, optsData []byte) ([
 	}
 
 	var (
-		pubKeyBytes []byte
-		err         error
+		err error
 
-		keyUrl  string = ""
+		keyUrl     string = ""
+		wrappedKey []byte = []byte{}
+
 		kbsUrl  string = string(ec.Parameters["kbs-url"][0])
 		kbsUid  string = string(ec.Parameters["kbs-uid"][0])
 		kbsCert []byte = ec.Parameters["kbs-cert"][0]
@@ -47,23 +71,41 @@ func (kw *seclKeyWrapper) WrapKeys(ec *config.EncryptConfig, optsData []byte) ([
 		keyUrl = string(ec.Parameters["kbs-keyurl-cache"][0])
 	}
 
-	pubKeyBytes, keyUrl, err = getPublicKeyFromBroker(kbsUrl, kbsCert, kbsUid, keyUrl)
-	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to obtain public key from broker at %v, for keyUrl %v", kbsUrl, keyUrl)
+	switch WrapMode {
+	case WrapTypeAssymmetric:
+		var pubKeyBytes []byte
+		pubKeyBytes, keyUrl, err = getPublicKeyFromBroker(kbsUrl, kbsCert, kbsUid, keyUrl)
+		if err != nil {
+			return nil, errors.Wrapf(err, "Unable to obtain public key from broker at %v, for keyUrl %v", kbsUrl, keyUrl)
+		}
+
+		// Create wrapped key blob
+		wrappedKey, err = jweEncrypt(pubKeyBytes, optsData)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to encrypt JWE packet")
+		}
+
+	case WrapTypeSymmetric:
+		var symKey []byte
+		symKey, keyUrl, err = getEncSymKeyFromBroker(kbsUrl, kbsCert, kbsUid, keyUrl)
+		if err != nil {
+			return nil, errors.Wrapf(err, "Unable to obtain sym key from broker at %v, for keyUrl %v", kbsUrl, keyUrl)
+		}
+
+		// Create wrapped key blob
+		wrappedKey, err = aesEncrypt(symKey, optsData)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to encrypt aes_gcm packet")
+		}
 	}
 
 	ec.Parameters["kbs-keyurl-cache"] = [][]byte{[]byte(keyUrl)}
-
-	// Create wrapped key blob
-	wrappedKey, err := jweEncrypt(pubKeyBytes, optsData)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to encrypt JWE packet")
-	}
 
 	// Create annotation packet
 	ap := annotationPacket{
 		KeyUrl:     keyUrl,
 		WrappedKey: wrappedKey,
+		WrapType:   WrapMode,
 	}
 
 	return json.Marshal(ap)
@@ -89,6 +131,26 @@ func (kw *seclKeyWrapper) UnwrapKey(dc *config.DecryptConfig, annotation []byte)
 	err := json.Unmarshal(annotation, &ap)
 	if err != nil {
 		return nil, errors.Wrap(err, "Unable to unmarshal annotation packet")
+	}
+
+	switch ap.WrapType {
+	case WrapTypeAssymmetric:
+		// Get private key from server and decrypt packet
+		privateKeyBytes, err := getPrivateKeyFromBroker(wlsUrl, wlsCertificate, ap.KeyUrl)
+		if err != nil {
+			return nil, errors.Wrapf(err, "Unable to obtain key (url: %v) from WLS $v", ap.KeyUrl, wlsUrl)
+		}
+
+		return jweDecrypt(privateKeyBytes, ap.WrappedKey)
+	case WrapTypeSymmetric:
+
+		// Get private key from server and decrypt packet
+		symKey, err := getDecSymKeyFromBroker(wlsUrl, wlsCertificate, ap.KeyUrl)
+		if err != nil {
+			return nil, errors.Wrapf(err, "Unable to obtain key (url: %v) from WLS $v", ap.KeyUrl, wlsUrl)
+		}
+
+		return aesDecrypt(symKey, ap.WrappedKey)
 	}
 
 	// Get private key from server and decrypt packet
@@ -180,6 +242,26 @@ fbpN2n9Uj9epE6EFPPPWMbwcd/FETKOJGZCgslfARZisEmvG+5HVEuPKV7uG4Qmb
 	return publicKey, kbsUrl + "/" + "some-key-id-xxx", nil
 }
 
+// getDecSymKeyFromBroker will obtain the sym key at keyUrl via the
+// workload service at wlsUrl, authenticated with wlsCertificate.
+//
+// It will then communicate with the local TPM to unwrap the private key.
+func getDecSymKeyFromBroker(wlsUrl string, wlsCertificate []byte, keyUrl string) (symKey []byte, err error) {
+	symKey = []byte("this_is_a_256_bit_AES_key_12345!")
+	return symKey, nil
+}
+
+// getEncSymKeyFromBroker will connect to a KBS at kbsUrl with certificate
+// kbsCert. It will use uid for authentication with AAS.
+//
+// If keyUrl == "", it will generate a new key and return the
+// key and the associated keyUrl = kbsUrl/keyId
+// Else, it will obtain the key of the given keyUrl
+func getEncSymKeyFromBroker(kbsUrl string, kbsCert []byte, uid string, keyUrl string) (symKey []byte, retKeyUrl string, err error) {
+	symKey = []byte("this_is_a_256_bit_AES_key_12345!")
+	return symKey, kbsUrl + "/" + "some-key-id-xxx", nil
+}
+
 // JWE Helper Functions
 func jweEncrypt(pubKey []byte, data []byte) ([]byte, error) {
 	var joseRecipients []jose.Recipient
@@ -245,6 +327,66 @@ func jweDecrypt(privKey []byte, jweString []byte) ([]byte, error) {
 	}
 
 	return plain, nil
+}
+
+// AES_GCM Helper Functions
+func aesEncrypt(key []byte, plaintext []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, errors.New("Expected 256 bit key")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Never use more than 2^32 random nonces with a given key because of the risk of a repeat.
+	nonce := make([]byte, 12)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	ciphertext := aesgcm.Seal(nil, nonce, plaintext, nil)
+	aesp := aesPacket{
+		Ciphertext: ciphertext,
+		Nonce:      nonce,
+	}
+
+	return json.Marshal(aesp)
+}
+
+func aesDecrypt(key []byte, data []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, errors.New("Expected 256 bit key")
+	}
+
+	var aesp aesPacket
+	err := json.Unmarshal(data, &aesp)
+	if err != nil {
+		return nil, errors.Wrap(err, "Unable to unmarshal aes packet")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	plaintext, err := aesgcm.Open(nil, aesp.Nonce, aesp.Ciphertext, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return plaintext, nil
 }
 
 // MAIN
