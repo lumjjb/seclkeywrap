@@ -3,6 +3,7 @@ package seclkeywrap
 import (
 	"crypto/ecdsa"
 	"encoding/json"
+	"os/exec"
 
 	// Sym key enc libs
 	"crypto/aes"
@@ -242,13 +243,28 @@ fbpN2n9Uj9epE6EFPPPWMbwcd/FETKOJGZCgslfARZisEmvG+5HVEuPKV7uG4Qmb
 	return publicKey, kbsUrl + "/" + "some-key-id-xxx", nil
 }
 
-// getDecSymKeyFromBroker will obtain the sym key at keyUrl via the
-// workload service at wlsUrl, authenticated with wlsCertificate.
-//
-// It will then communicate with the local TPM to unwrap the private key.
+// KeyInfo if the return json struct from the key broker for a valid key
+type KeyInfo struct {
+	KeyURL string `json:"key_url"`
+	Key    []byte `json:"key"`
+}
+
 func getDecSymKeyFromBroker(wlsUrl string, wlsCertificate []byte, keyUrl string) (symKey []byte, err error) {
-	symKey = []byte("this_is_a_256_bit_AES_key_12345!")
-	return symKey, nil
+	//symKey = []byte("this_is_a_256_bit_AES_key_12345!")
+	//return symKey, nil
+	//run wpm to fetch a new key
+	cmdout, err := exec.Command("wlagent", "fetch-key-url", keyUrl).Output()
+	if err != nil {
+		return nil, errors.Wrap(err, "Unable to run wlagent")
+	}
+
+	var retKey KeyInfo
+	err = json.Unmarshal(cmdout[:], &retKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "Unable to unmarshal Keyinfo")
+	}
+
+	return retKey.Key, nil
 }
 
 // getEncSymKeyFromBroker will connect to a KBS at kbsUrl with certificate
@@ -258,8 +274,24 @@ func getDecSymKeyFromBroker(wlsUrl string, wlsCertificate []byte, keyUrl string)
 // key and the associated keyUrl = kbsUrl/keyId
 // Else, it will obtain the key of the given keyUrl
 func getEncSymKeyFromBroker(kbsUrl string, kbsCert []byte, uid string, keyUrl string) (symKey []byte, retKeyUrl string, err error) {
-	symKey = []byte("this_is_a_256_bit_AES_key_12345!")
-	return symKey, kbsUrl + "/" + "some-key-id-xxx", nil
+	/*
+	   symKey = []byte("this_is_a_256_bit_AES_key_12345!")
+	   return symKey, kbsUrl + "/" + "some-key-id-xxx", nil
+	*/
+	//run wpm to fetch a new key
+	cmdout, err := exec.Command("wpm", "fetch-key").Output()
+	if err != nil {
+		return nil, "", errors.Wrap(err, "Unable to run wpm")
+	}
+
+	var retKey KeyInfo
+	err = json.Unmarshal(cmdout[:], &retKey)
+	if err != nil {
+
+		return nil, "", errors.Wrap(err, "Unable to unmarshal Keyinfo")
+
+	}
+	return retKey.Key, retKey.KeyURL, nil
 }
 
 // JWE Helper Functions
