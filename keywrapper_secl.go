@@ -47,37 +47,35 @@ func NewKeyWrapper() keywrap.KeyWrapper {
 
 func (kw *seclKeyWrapper) WrapKeys(ec *config.EncryptConfig, optsData []byte) ([]byte, error) {
 	// If no KBS url provided, nothing to encrypt for
-	if len(ec.Parameters["kbs-url"]) == 0 {
+	if len(ec.Parameters["secl-enabled"]) == 0 {
 		return nil, nil
 	}
 
-	// Check for required input parameters
-	if len(ec.Parameters["kbs-url"]) != 1 || len(ec.Parameters["kbs-uid"]) != 1 || len(ec.Parameters["kbs-cert"]) != 1 {
-		return nil, errors.New("Only one KBS parameter is supported")
+	if len(ec.Parameters["secl-asset-tag"]) != 1 {
+		return nil, errors.New("Current support encryption for 1 asset tag at a time")
 	}
 
+	assetTag := string(ec.Parameters["secl-asset-tag"][0])
+
+	// Check for required input parameters
 	var (
 		err error
 
 		keyUrl     string = ""
 		wrappedKey []byte = []byte{}
-
-		kbsUrl  string = string(ec.Parameters["kbs-url"][0])
-		kbsUid  string = string(ec.Parameters["kbs-uid"][0])
-		kbsCert []byte = ec.Parameters["kbs-cert"][0]
 	)
 
 	// Cache keyUrl in ec.Parameters["kbs-keyurl-cache"] for same process memory encryption
-	if len(ec.Parameters["kbs-keyurl-cache"]) == 1 {
-		keyUrl = string(ec.Parameters["kbs-keyurl-cache"][0])
+	if len(ec.Parameters["keyurl-cache"]) == 1 {
+		keyUrl = string(ec.Parameters["keyurl-cache"][0])
 	}
 
 	switch WrapMode {
 	case WrapTypeAssymmetric:
 		var pubKeyBytes []byte
-		pubKeyBytes, keyUrl, err = getPublicKeyFromBroker(kbsUrl, kbsCert, kbsUid, keyUrl)
+		pubKeyBytes, keyUrl, err = getPublicKeyFromBroker(keyUrl, assetTag)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Unable to obtain public key from broker at %v, for keyUrl %v", kbsUrl, keyUrl)
+			return nil, errors.Wrapf(err, "Unable to obtain public key from broker")
 		}
 
 		// Create wrapped key blob
@@ -88,9 +86,9 @@ func (kw *seclKeyWrapper) WrapKeys(ec *config.EncryptConfig, optsData []byte) ([
 
 	case WrapTypeSymmetric:
 		var symKey []byte
-		symKey, keyUrl, err = getEncSymKeyFromBroker(kbsUrl, kbsCert, kbsUid, keyUrl)
+		symKey, keyUrl, err = getEncSymKeyFromBroker(keyUrl, assetTag)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Unable to obtain sym key from broker at %v, for keyUrl %v", kbsUrl, keyUrl)
+			return nil, errors.Wrapf(err, "Unable to obtain sym key from broker")
 		}
 
 		// Create wrapped key blob
@@ -100,7 +98,7 @@ func (kw *seclKeyWrapper) WrapKeys(ec *config.EncryptConfig, optsData []byte) ([
 		}
 	}
 
-	ec.Parameters["kbs-keyurl-cache"] = [][]byte{[]byte(keyUrl)}
+	ec.Parameters["keyurl-cache"] = [][]byte{[]byte(keyUrl)}
 
 	// Create annotation packet
 	ap := annotationPacket{
@@ -114,19 +112,9 @@ func (kw *seclKeyWrapper) WrapKeys(ec *config.EncryptConfig, optsData []byte) ([
 
 func (kw *seclKeyWrapper) UnwrapKey(dc *config.DecryptConfig, annotation []byte) ([]byte, error) {
 	// If no WLS url given, nothing to decrypt
-	if len(dc.Parameters["wls-url"]) == 0 {
+	if len(dc.Parameters["secl-enabled"]) == 0 {
 		return nil, nil
 	}
-
-	// Check parameters
-	if len(dc.Parameters["wls-url"]) != 1 || len(dc.Parameters["wls-cert"]) != 1 {
-		return nil, errors.New("Only one WLS parameter is supported")
-	}
-
-	var (
-		wlsUrl         string = string(dc.Parameters["wls-url"][0])
-		wlsCertificate []byte = dc.Parameters["wls-cert"][0]
-	)
 
 	var ap annotationPacket
 	err := json.Unmarshal(annotation, &ap)
@@ -137,27 +125,27 @@ func (kw *seclKeyWrapper) UnwrapKey(dc *config.DecryptConfig, annotation []byte)
 	switch ap.WrapType {
 	case WrapTypeAssymmetric:
 		// Get private key from server and decrypt packet
-		privateKeyBytes, err := getPrivateKeyFromBroker(wlsUrl, wlsCertificate, ap.KeyUrl)
+		privateKeyBytes, err := getPrivateKeyFromBroker(ap.KeyUrl)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Unable to obtain key (url: %v) from WLS $v", ap.KeyUrl, wlsUrl)
+			return nil, errors.Wrapf(err, "Unable to obtain key (url: %v)", ap.KeyUrl)
 		}
 
 		return jweDecrypt(privateKeyBytes, ap.WrappedKey)
 	case WrapTypeSymmetric:
 
 		// Get private key from server and decrypt packet
-		symKey, err := getDecSymKeyFromBroker(wlsUrl, wlsCertificate, ap.KeyUrl)
+		symKey, err := getDecSymKeyFromBroker(ap.KeyUrl)
 		if err != nil {
-			return nil, errors.Wrapf(err, "Unable to obtain key (url: %v) from WLS $v", ap.KeyUrl, wlsUrl)
+			return nil, errors.Wrapf(err, "Unable to obtain key (url: %v)", ap.KeyUrl)
 		}
 
 		return aesDecrypt(symKey, ap.WrappedKey)
 	}
 
 	// Get private key from server and decrypt packet
-	privateKeyBytes, err := getPrivateKeyFromBroker(wlsUrl, wlsCertificate, ap.KeyUrl)
+	privateKeyBytes, err := getPrivateKeyFromBroker(ap.KeyUrl)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to obtain key (url: %v) from WLS $v", ap.KeyUrl, wlsUrl)
+		return nil, errors.Wrapf(err, "Unable to obtain key (url: %v)", ap.KeyUrl)
 	}
 
 	return jweDecrypt(privateKeyBytes, ap.WrappedKey)
@@ -174,7 +162,7 @@ func (kw *seclKeyWrapper) GetPrivateKeys(dcparameters map[string][][]byte) [][]b
 }
 
 func (kw *seclKeyWrapper) NoPossibleKeys(dcparameters map[string][][]byte) bool {
-	return len(dcparameters["wls-url"]) == 0
+	return len(dcparameters["secl-enabled"]) == 0
 }
 
 // GetKeyIdsFromPacket (optional) gets a list of key IDs. This is optional as some encryption
@@ -193,7 +181,7 @@ func (kw *seclKeyWrapper) GetRecipients(packet string) ([]string, error) {
 // workload service at wlsUrl, authenticated with wlsCertificate.
 //
 // It will then communicate with the local TPM to unwrap the private key.
-func getPrivateKeyFromBroker(wlsUrl string, wlsCertificate []byte, keyUrl string) (privateKey []byte, err error) {
+func getPrivateKeyFromBroker(keyUrl string) (privateKey []byte, err error) {
 	privateKey = []byte(`-----BEGIN RSA PRIVATE KEY-----
 MIIEowIBAAKCAQEAnYarY9vO4oiCgMqIWNStjUdg+1x0NKKxVBLXhkUsY6JiTSUl
 j8I3NThHIpML2A9T0GNSCXFpWob3ORxd0LlPrqSNhXl0PrJlJoT4f1ExV44Rjzww
@@ -230,7 +218,7 @@ Tsm/LQaJgmcu66cHvJrMNRbusIUiAy+041X08dD+GkDeJoGsJIc+
 // If keyUrl == "", it will generate a new key pair and return the public
 // key and the associated keyUrl = kbsUrl/keyId
 // Else, it will obtain the public key of the given keyUrl
-func getPublicKeyFromBroker(kbsUrl string, kbsCert []byte, uid string, keyUrl string) (publicKey []byte, retKeyUrl string, err error) {
+func getPublicKeyFromBroker(keyUrl string, assetTag string) (publicKey []byte, retKeyUrl string, err error) {
 	publicKey = []byte(`-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnYarY9vO4oiCgMqIWNSt
 jUdg+1x0NKKxVBLXhkUsY6JiTSUlj8I3NThHIpML2A9T0GNSCXFpWob3ORxd0LlP
@@ -240,7 +228,7 @@ bo3JwGKTAXHD7CmCRXv3eqjHVqPVqWjvfj4KuL0TkncjUmYL7LL/fk7Loxdlhs7Q
 fbpN2n9Uj9epE6EFPPPWMbwcd/FETKOJGZCgslfARZisEmvG+5HVEuPKV7uG4Qmb
 1wIDAQAB
 -----END PUBLIC KEY-----`)
-	return publicKey, kbsUrl + "/" + "some-key-id-xxx", nil
+	return publicKey, "https://kbs.url/" + "some-key-id-xxx", nil
 }
 
 // KeyInfo if the return json struct from the key broker for a valid key
@@ -249,7 +237,7 @@ type KeyInfo struct {
 	Key    []byte `json:"key"`
 }
 
-func getDecSymKeyFromBroker(wlsUrl string, wlsCertificate []byte, keyUrl string) (symKey []byte, err error) {
+func getDecSymKeyFromBroker(keyUrl string) (symKey []byte, err error) {
 	//symKey = []byte("this_is_a_256_bit_AES_key_12345!")
 	//return symKey, nil
 	//run wpm to fetch a new key
@@ -273,15 +261,24 @@ func getDecSymKeyFromBroker(wlsUrl string, wlsCertificate []byte, keyUrl string)
 // If keyUrl == "", it will generate a new key and return the
 // key and the associated keyUrl = kbsUrl/keyId
 // Else, it will obtain the key of the given keyUrl
-func getEncSymKeyFromBroker(kbsUrl string, kbsCert []byte, uid string, keyUrl string) (symKey []byte, retKeyUrl string, err error) {
+func getEncSymKeyFromBroker(keyUrl string, assetTag string) (symKey []byte, retKeyUrl string, err error) {
 	/*
 	   symKey = []byte("this_is_a_256_bit_AES_key_12345!")
 	   return symKey, kbsUrl + "/" + "some-key-id-xxx", nil
 	*/
-	//run wpm to fetch a new key
-	cmdout, err := exec.Command("wpm", "fetch-key").Output()
-	if err != nil {
-		return nil, "", errors.Wrap(err, "Unable to run wpm")
+	var (
+		cmdout []byte
+	)
+
+	if assetTag == "" {
+		//run wpm to fetch a new key
+		cmdout, err = exec.Command("wpm", "fetch-key").Output()
+		if err != nil {
+			return nil, "", errors.Wrap(err, "Unable to run wpm")
+		}
+	} else {
+		// TODO(Haidong) to implement call for asset tag
+		return nil, "", errors.New("Not Implemented: asset tag implementation for encryption")
 	}
 
 	var retKey KeyInfo

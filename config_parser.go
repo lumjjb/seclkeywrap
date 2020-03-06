@@ -1,7 +1,6 @@
 package seclkeywrap
 
 import (
-	"io/ioutil"
 	"strings"
 
 	encconfig "github.com/containers/ocicrypt/config"
@@ -13,21 +12,20 @@ const (
 )
 
 /*
-* Recipient protocol will be secl:kbs-url,kbs-uid,kbs-cert-file-path
-* Key string will be secl:wls-url,wls-cert-path
-**
-
+* Recipient protocol will be secl:any for just trusted, or secl:<asset tag>
+* for use of asset tag
+* Key string will be secl:enabled
  */
 
 type encInfo struct {
-	kbsUrl  string
-	kbsUid  string
-	kbsCert []byte
+	// assetTag indicates which asset tag to use, "" indicates none
+	// and should be runnable by any trusted node
+	assetTag string
 }
 
 type decInfo struct {
-	wlsUrl  string
-	wlsCert []byte
+	// seclEnabled indicates if secl is enabled
+	seclEnabled bool
 }
 
 // CreateCryptoConfig
@@ -42,9 +40,8 @@ func CreateCryptoConfig(recipients []string, keys []string) (encconfig.CryptoCon
 		Parameters: map[string][][]byte{},
 	}
 	for _, ei := range encInfos {
-		ec.Parameters["kbs-url"] = append(ec.Parameters["kbs-url"], []byte(ei.kbsUrl))
-		ec.Parameters["kbs-uid"] = append(ec.Parameters["kbs-uid"], []byte(ei.kbsUid))
-		ec.Parameters["kbs-cert"] = append(ec.Parameters["kbs-kbs-cert"], ei.kbsCert)
+		ec.Parameters["secl-enabled"] = append(ec.Parameters["secl-enabled"], []byte("yes"))
+		ec.Parameters["secl-asset-tag"] = append(ec.Parameters["secl-asset-tag"], []byte(ei.assetTag))
 	}
 
 	// Parse keys
@@ -57,9 +54,8 @@ func CreateCryptoConfig(recipients []string, keys []string) (encconfig.CryptoCon
 		Parameters: map[string][][]byte{},
 	}
 
-	for _, di := range decInfos {
-		dc.Parameters["wls-url"] = append(dc.Parameters["wls-url"], []byte(di.wlsUrl))
-		dc.Parameters["wls-cert"] = append(dc.Parameters["wls-kbs-cert"], di.wlsCert)
+	for range decInfos {
+		dc.Parameters["secl-enabled"] = append(dc.Parameters["secl-enabled"], []byte("yes"))
 	}
 
 	ec.DecryptConfig = dc
@@ -101,28 +97,13 @@ func parseRecipients(recipients []string) ([]encInfo, error) {
 		}
 
 		varString := strings.TrimPrefix(r, seclPrefix)
-		vars := strings.Split(r, ",")
-
-		if len(vars) != 3 {
-			return nil, errors.Errorf("Invalid format of recipient (expecting 3 fields): %v", varString)
-		}
-
-		// Format is: kbs-url,kbs-uid,kbs-cert-file-path
-		var (
-			kbsUrl      string = vars[0]
-			kbsUid      string = vars[1]
-			kbsCertPath string = vars[2]
-		)
-
-		kbsCert, err := ioutil.ReadFile(kbsCertPath)
-		if err != nil {
-			return nil, errors.Wrapf(err, "Unable to read certfile: %v", kbsCertPath)
+		assetTag := ""
+		if varString != "any" {
+			assetTag = varString
 		}
 
 		ret = append(ret, encInfo{
-			kbsUrl:  kbsUrl,
-			kbsUid:  kbsUid,
-			kbsCert: kbsCert,
+			assetTag: assetTag,
 		})
 	}
 
@@ -136,45 +117,8 @@ func parseKeys(keys []string) ([]decInfo, error) {
 			continue
 		}
 
-		varString := strings.TrimPrefix(k, seclPrefix)
-		vars := strings.Split(k, ",")
-
-		if len(vars) != 2 {
-			return nil, errors.Errorf("Unablae to parse key: %v", varString)
-		}
-
-		// Format is: wls-url,wls-cert-path
-		var (
-			wlsUrl      string = vars[0]
-			wlsCertPath string = vars[1]
-		)
-
-		wlsCert, err := ioutil.ReadFile(wlsCertPath)
-		if err != nil {
-			return nil, errors.Wrapf(err, "Unable to read certfile: %v", wlsCertPath)
-		}
-
-		ret = append(ret, decInfo{
-			wlsUrl:  wlsUrl,
-			wlsCert: wlsCert,
-		})
+		ret = append(ret, decInfo{})
 	}
 
 	return ret, nil
 }
-
-/*
-        EncryptConfig
-	var (
-		kbsUrl  string = string(ec.Parameters["kbs-url"][0])
-		kbsUid  string = string(ec.Parameters["kbs-uid"][0])
-		kbsCert []byte = ec.Parameters["kbs-cert"][0]
-	)
-
-
-        DecryptConfig
-	var (
-		wlsUrl         string = string(dc.Parameters["wls-url"][0])
-		wlsCertificate []byte = dc.Parameters["wls-cert"][0]
-	)
-*/
