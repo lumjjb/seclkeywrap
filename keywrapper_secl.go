@@ -152,7 +152,7 @@ func (kw *seclKeyWrapper) UnwrapKey(dc *config.DecryptConfig, annotation []byte)
 }
 
 func (kw *seclKeyWrapper) GetAnnotationID() string {
-	return "org.opencontainers.image.enc.keys.isecl.jwe"
+	return "org.opencontainers.image.enc.keys.isecl"
 }
 
 // GetPrivateKeys (optional) gets the array of private keys. It is an optional
