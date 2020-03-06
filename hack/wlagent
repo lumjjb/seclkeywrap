@@ -1,0 +1,27 @@
+#!/usr/bin/python3
+
+import sys
+
+key_map={
+ "https://10.105.168.74:9443/v1/keys/62c5425c-67cb-4c8c-a129-3ae73c8d7d1f/transfer": '{"key_url":"https://10.105.168.74:9443/v1/keys/62c5425c-67cb-4c8c-a129-3ae73c8d7d1f/transfer","key":"pMfRXVqq1rxV7ksNAy8Dr64QSxjFmXPI045EKD/eeAA="}',
+ "https://10.105.168.74:9443/v1/keys/7068e461-6cd7-4a93-80b2-d9e109ab22ac/transfer" : '{"key_url":"https://10.105.168.74:9443/v1/keys/7068e461-6cd7-4a93-80b2-d9e109ab22ac/transfer","key":"bf8Yt/eH9i80PFd72SY9hpHzDY9/0l3mEWrTmIWGIsM="}',
+ "https://10.105.168.74:9443/v1/keys/c4307e2a-0610-402a-a03e-a0c58846f339/transfer" : '{"key_url":"https://10.105.168.74:9443/v1/keys/c4307e2a-0610-402a-a03e-a0c58846f339/transfer","key":"Lsa/X/5bVVg+LwmyIz14up39+1Sas4AUfZ2qx5ZRWdE="}',
+}
+
+def main():
+    if len(sys.argv) != 3:
+        print ("ERROR: Insufficient arguments")
+        sys.exit(1)
+    if sys.argv[1] != "fetch-key-url":
+        print ("ERROR: Operation {} not supported".format(sys.argv[1]))
+        sys.exit(1)
+    ret = (key_map[sys.argv[2].strip()])
+    if not ret:
+        print ("ERROR: Key URL {} entry doesn't exist".format(sys.argv[2]))
+        sys.exit(1)
+
+    sys.stdout.write(ret)
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()

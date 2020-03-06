@@ -1,0 +1,1 @@
+These binary scripts are used to replicate a sample wpm and wlagent running in a intel secl cluster, with 3 possible key combinations. To use this for testing, copy them to a directory in $PATH (i.e. /usr/local/bin).
