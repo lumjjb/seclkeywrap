@@ -10,6 +10,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"io"
+	"sync"
 
 	"github.com/containers/ocicrypt/config"
 	"github.com/containers/ocicrypt/keywrap"
@@ -27,6 +28,7 @@ const (
 
 var (
 	WrapMode string = WrapTypeSymmetric
+	WlLock   sync.Mutex
 )
 
 type seclKeyWrapper struct{}
@@ -241,6 +243,8 @@ func getDecSymKeyFromBroker(keyUrl string) (symKey []byte, err error) {
 	//symKey = []byte("this_is_a_256_bit_AES_key_12345!")
 	//return symKey, nil
 	//run wpm to fetch a new key
+	WlLock.Lock()
+	defer WlLock.Unlock()
 	cmdout, err := exec.Command("wlagent", "fetch-key-url", keyUrl).Output()
 	if err != nil {
 		return nil, errors.Wrap(err, "Unable to run wlagent")
