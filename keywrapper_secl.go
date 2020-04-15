@@ -242,7 +242,7 @@ type KeyInfo struct {
 func getDecSymKeyFromBroker(keyUrl string) (symKey []byte, err error) {
 	//symKey = []byte("this_is_a_256_bit_AES_key_12345!")
 	//return symKey, nil
-	//run wpm to fetch a new key
+	//run wlagent to fetch a new key
 	WlLock.Lock()
 	defer WlLock.Unlock()
 	cmdout, err := exec.Command("wlagent", "fetch-key-url", keyUrl).Output()
@@ -281,8 +281,11 @@ func getEncSymKeyFromBroker(keyUrl string, assetTag string) (symKey []byte, retK
 			return nil, "", errors.Wrap(err, "Unable to run wpm")
 		}
 	} else {
-		// TODO(Haidong) to implement call for asset tag
-		return nil, "", errors.New("Not Implemented: asset tag implementation for encryption")
+		//run wpm to fetch a new key with associated asset tag
+		cmdout, err = exec.Command("wpm", "fetch-key", "-t", assetTag).Output()
+		if err != nil {
+			return nil, "", errors.Wrap(err, "Unable to run wpm with specified asset tag")
+		}
 	}
 
 	var retKey KeyInfo
